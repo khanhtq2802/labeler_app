@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Invoice Labeler</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <div class="title">Invoice Labeler</div>
+    <div class="nav">
+      <button id="btn-prev">◀ Back</button>
+      <input type="number" id="goto-input" min="1" placeholder="#">
+      <button id="btn-goto">Go</button>
+      <button id="btn-next">Next ▶</button>
+    </div>
+    <div class="position" id="position">-- / --</div>
+    <div class="image-name" id="image-name" title=""></div>
+    <button id="toggle-row-info">Show row data ▾</button>
+    <div class="method-select">
+      <label for="method">Translation:</label>
+      <select id="method">
+        <option value="google_cloud">Google Cloud (paid)</option>
+        <option value="free">Free OCR</option>
+        <option value="manual">Manual / browser</option>
+      </select>
+    </div>
+  </header>
+
+  <pre id="row-info-content" style="display:none"></pre>
+
+  <main>
+    <section class="panel" id="panel-original">
+      <div class="panel-header">
+        <span>Original</span>
+        <div class="controls">
+          <button data-action="toggle-solo" data-target="original" title="Ẩn panel còn lại / khôi phục">⛶</button>
+          <button data-action="zoom-out" data-target="original">−</button>
+          <button data-action="zoom-reset" data-target="original">reset</button>
+          <button data-action="zoom-in" data-target="original">+</button>
+          <button data-action="rotate-left" data-target="original" title="Xoay trái 90°">⟲</button>
+          <button data-action="rotate-right" data-target="original" title="Xoay phải 90°">⟳</button>
+          <button data-action="commit-rotate" data-target="original" title="Lưu góc xoay vào file gốc & dịch lại">💾</button>
+        </div>
+      </div>
+      <div class="image-viewport" id="viewport-original">
+        <img id="img-original" alt="original invoice">
+      </div>
+    </section>
+
+    <section class="panel" id="panel-translated">
+      <div class="panel-header">
+        <span>Translated</span>
+        <div class="controls">
+          <button data-action="toggle-solo" data-target="translated" title="Ẩn panel còn lại / khôi phục">⛶</button>
+          <button data-action="zoom-out" data-target="translated">−</button>
+          <button data-action="zoom-reset" data-target="translated">reset</button>
+          <button data-action="zoom-in" data-target="translated">+</button>
+          <button data-action="rotate-left" data-target="translated" title="Xoay trái 90°">⟲</button>
+          <button data-action="rotate-right" data-target="translated" title="Xoay phải 90°">⟳</button>
+          <button data-action="commit-rotate" data-target="translated" title="Lưu góc xoay vào file gốc & dịch lại">💾</button>
+        </div>
+      </div>
+      <div class="image-viewport" id="viewport-translated">
+        <img id="img-translated" alt="translated invoice" style="display:none">
+        <div id="translated-status" class="status-overlay"></div>
+      </div>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

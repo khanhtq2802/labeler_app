@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+pillow
+pandas
+pyyaml
+
+# Needed only for translation_method: manual (drives a real browser via Playwright)
+# After installing, run: playwright install chromium   (or it uses system Chrome)
+playwright
+
+# Needed only for translation_method: free
+pytesseract
+deep-translator
+
+# Needed only for translation_method: google_cloud
+google-cloud-vision
+google-cloud-translate

@@ -1,0 +1,52 @@
+# Copy this file to config.yaml and edit the values for your machine.
+
+# Where the invoice images live, and the CSV that defines labeling order.
+image_folder_path: "/home/khanhtq3/projects/FLSK_2026_Q2/data/Mecharant/train_image_070426"
+csv_path: "/home/khanhtq3/Downloads/data/prelabel_results"
+
+# Column in the CSV that holds the image filename.
+image_name_column: "image_file_name"
+
+# Appended to the filename if it doesn't already have an extension.
+# Leave as "" if the column already contains the full filename with extension.
+file_extension: ".jpg"
+
+# Language codes (ISO 639-1). Used by OCR/translation engines.
+original_language: "ja"
+target_language: "vi"
+
+# How translated overlays get produced: google_cloud | free | manual
+translation_method: "free"
+
+# Where translated images are cached so we never re-translate the same file.
+cache_folder: "./cache"
+
+# Where rotated copies of originals are saved when you rotate-and-save an image.
+# The source files are never modified; the app uses the rotated copy if present.
+rotated_folder: "./rotated"
+
+# Where the "last viewed row" is remembered between runs.
+state_file: "./state.json"
+
+# Font used to draw translated text onto the image. Must support the target
+# language's characters (Vietnamese needs diacritics). DejaVu Sans works on
+# most Linux systems out of the box.
+font_path: "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+
+google_cloud:
+  # Path to a GCP service account JSON key with Vision + Translation access.
+  # Alternatively, set the GOOGLE_APPLICATION_CREDENTIALS env var and leave this blank.
+  credentials_json: ""
+
+free:
+  # Tesseract language code for the source language (install with e.g.
+  # `sudo apt install tesseract-ocr tesseract-ocr-jpn tesseract-ocr-jpn-vert`)
+  tesseract_lang: "jpn"
+
+manual:
+  # URL opened when you click "Open in Google Translate". sl/tl are pre-filled.
+  translate_url: "https://translate.google.com/?sl={source}&tl={target}&op=images"
+
+server:
+  host: "127.0.0.1"
+  port: 8000

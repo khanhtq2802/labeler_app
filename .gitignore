@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Local config & state (use config.example.yaml as template)
+config.yaml
+state.json
+
+# Generated / cached data
+cache/
+rotated/
+_playwright_profile/
+
+# Editor / tooling
+.claude/
+.vscode/
+.idea/
+.DS_Store
