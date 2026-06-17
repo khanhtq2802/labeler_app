@@ -2,7 +2,7 @@
 
 # Where the invoice images live, and the CSV that defines labeling order.
 image_folder_path: "/home/khanhtq3/projects/FLSK_2026_Q2/data/Mecharant/train_image_070426"
-csv_path: "/home/khanhtq3/Downloads/data/prelabel_results"
+csv_path: "/home/khanhtq3/Downloads/data/prelabel_results.csv"
 
 # Column in the CSV that holds the image filename.
 image_name_column: "image_file_name"
@@ -16,7 +16,8 @@ original_language: "ja"
 target_language: "vi"
 
 # How translated overlays get produced: google_cloud | free | manual
-translation_method: "free"
+# google_cloud and free are still in development and may not work well. manual just opens Google Translate in a browser tab for you to copy-paste from.
+translation_method: "manual"
 
 # Where translated images are cached so we never re-translate the same file.
 cache_folder: "./cache"

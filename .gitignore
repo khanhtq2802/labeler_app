@@ -6,7 +6,6 @@ __pycache__/
 venv/
 
 # Local config & state (use config.example.yaml as template)
-config.yaml
 state.json
 
 # Generated / cached data
