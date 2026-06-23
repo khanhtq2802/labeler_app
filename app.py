@@ -10,7 +10,7 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 from pydantic import BaseModel
 
-from config import Config, load_config
+from config import Config, build_config, load_config, load_raw, save_raw
 from dataset import Dataset, StateStore
 from translators import ManualTranslationPending, get_translator
 
@@ -26,7 +26,9 @@ cfg.cache_folder.mkdir(parents=True, exist_ok=True)
 cfg.rotated_folder.mkdir(parents=True, exist_ok=True)
 
 # Mutable at runtime via /api/method, without touching config.yaml.
-runtime = {"method": cfg.translation_method}
+# `confirmed` gates labeling behind the startup confirmation screen; it resets to
+# False on every server start so the config is re-confirmed each run.
+runtime = {"method": cfg.translation_method, "confirmed": False}
 
 
 def cache_path_for(index: int) -> Path:
@@ -160,8 +162,98 @@ def _state_payload(index: int) -> dict:
 
 @app.get("/api/state")
 def get_state(background_tasks: BackgroundTasks):
-    _queue_prefetch(background_tasks, state.index)
-    return _state_payload(state.index)
+    # Clamp first: a stale state file can point past the end of a smaller CSV.
+    index = state.clamp(len(dataset))
+    _queue_prefetch(background_tasks, index)
+    return _state_payload(index)
+
+
+def _setup_payload() -> dict:
+    """Everything the startup confirmation screen needs: the (editable) config plus
+    a scan of which CSV images are missing or ambiguous across the image folders."""
+    report = dataset.scan_report()
+    return {
+        "image_folders": [str(f) for f in cfg.image_folders],
+        "csv_path": str(cfg.csv_path),
+        "image_name_column": cfg.image_name_column,
+        "file_extension": cfg.file_extension,
+        "original_language": cfg.original_language,
+        "target_language": cfg.target_language,
+        "translation_method": runtime["method"],
+        "total": len(dataset),
+        "missing": report["missing"],
+        "conflicts": report["conflicts"],
+    }
+
+
+@app.get("/api/setup")
+def get_setup():
+    return _setup_payload()
+
+
+class ConfigUpdateRequest(BaseModel):
+    image_folders: list[str]
+    csv_path: str
+    image_name_column: str
+    file_extension: str = ""
+    original_language: str = "ja"
+    target_language: str = "vi"
+
+
+@app.post("/api/config/update")
+def update_config(req: ConfigUpdateRequest):
+    """Apply edits made on the confirmation screen: rebuild config + dataset in
+    memory, persist to config.yaml, and return a fresh scan. The new config is
+    validated (config built, CSV loaded) BEFORE anything is written or swapped in,
+    so a bad edit can't corrupt the file or break the running app."""
+    global cfg, dataset
+
+    folders = [f.strip() for f in req.image_folders if f.strip()]
+    if not folders:
+        raise HTTPException(400, "Cần ít nhất một thư mục ảnh.")
+
+    config_path, raw = load_raw()
+    new_raw = dict(raw)
+    new_raw.pop("image_folder_path", None)  # migrate the legacy key away
+    new_raw["image_folders"] = folders
+    new_raw["csv_path"] = req.csv_path.strip()
+    new_raw["image_name_column"] = req.image_name_column.strip()
+    new_raw["file_extension"] = req.file_extension
+    new_raw["original_language"] = req.original_language.strip()
+    new_raw["target_language"] = req.target_language.strip()
+
+    try:
+        new_cfg = build_config(config_path, new_raw)
+        new_dataset = Dataset(new_cfg)
+    except Exception as exc:
+        raise HTTPException(400, f"Cấu hình không hợp lệ: {exc}")
+
+    save_raw(config_path, new_raw)
+    cfg = new_cfg
+    dataset = new_dataset
+    cfg.cache_folder.mkdir(parents=True, exist_ok=True)
+    cfg.rotated_folder.mkdir(parents=True, exist_ok=True)
+    return _setup_payload()
+
+
+class ConfirmRequest(BaseModel):
+    method: str | None = None
+    # index -> chosen folder path, for images found in more than one folder.
+    choices: dict[int, str] = {}
+
+
+@app.post("/api/confirm")
+def confirm_setup(req: ConfirmRequest):
+    """Apply the user's folder choices for ambiguous images, optionally update the
+    translation method, and unlock labeling for this run."""
+    for index, folder in req.choices.items():
+        if 0 <= index < len(dataset):
+            dataset.set_choice(index, Path(folder))
+    if req.method in ("google_cloud", "free", "manual"):
+        runtime["method"] = req.method
+    runtime["confirmed"] = True
+    index = state.clamp(len(dataset))
+    return _state_payload(index)
 
 
 class NavigateRequest(BaseModel):
@@ -312,7 +404,7 @@ def rotate_image(index: int, req: RotateRequest):
 @app.get("/api/config")
 def get_config():
     return {
-        "image_folder_path": str(cfg.image_folder_path),
+        "image_folders": [str(f) for f in cfg.image_folders],
         "csv_path": str(cfg.csv_path),
         "image_name_column": cfg.image_name_column,
         "original_language": cfg.original_language,

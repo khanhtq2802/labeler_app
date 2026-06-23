@@ -12,9 +12,13 @@ state.json
 cache/
 rotated/
 _playwright_profile/
+label_tasks/
 
 # Editor / tooling
 .claude/
 .vscode/
 .idea/
 .DS_Store
+
+# Local machine config (copy config.example.yaml -> config.yaml)
+config.yaml

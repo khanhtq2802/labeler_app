@@ -7,6 +7,30 @@
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div id="setup-overlay">
+    <div class="setup-card">
+      <h1>Xác nhận cấu hình</h1>
+      <p class="setup-sub">Kiểm tra cấu hình bên dưới trước khi bắt đầu gán nhãn.</p>
+
+      <div id="setup-summary" class="setup-section"></div>
+      <div id="setup-missing" class="setup-section"></div>
+      <div id="setup-conflicts" class="setup-section"></div>
+
+      <div class="setup-method">
+        <label for="setup-method-select">Phương thức dịch:</label>
+        <select id="setup-method-select">
+          <option value="google_cloud">Google Cloud (paid)</option>
+          <option value="free">Free OCR</option>
+          <option value="manual">Manual / browser</option>
+        </select>
+      </div>
+
+      <div class="setup-actions">
+        <button id="setup-confirm">Bắt đầu gán nhãn ▶</button>
+      </div>
+    </div>
+  </div>
+
   <header>
     <div class="title">Invoice Labeler</div>
     <div class="nav">

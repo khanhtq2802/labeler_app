@@ -12,7 +12,7 @@ DEFAULT_CONFIG_PATH = Path(__file__).parent / "config.yaml"
 
 @dataclass
 class Config:
-    image_folder_path: Path
+    image_folders: list[Path]
     csv_path: Path
     image_name_column: str
     file_extension: str
@@ -29,12 +29,15 @@ class Config:
     server_host: str
     server_port: int
     base_dir: Path = field(repr=False)
+    config_path: Path = field(repr=False)
 
-    def resolve_image_path(self, image_name: str) -> Path:
+    def apply_extension(self, image_name: str) -> str:
+        """Return the on-disk filename for a CSV image name, appending the
+        configured extension when the name has none."""
         name = str(image_name).strip()
         if not Path(name).suffix and self.file_extension:
             name = name + self.file_extension
-        return self.image_folder_path / name
+        return name
 
 
 def _resolve_path(base_dir: Path, value: str) -> Path:
@@ -44,17 +47,57 @@ def _resolve_path(base_dir: Path, value: str) -> Path:
     return p
 
 
-def load_config(path: str | Path | None = None) -> Config:
-    config_path = Path(path or os.environ.get(CONFIG_ENV_VAR) or DEFAULT_CONFIG_PATH)
+def _resolve_image_folders(base_dir: Path, raw: dict) -> list[Path]:
+    """Read the image folder(s) from config. Accepts the new `image_folders`
+    (a list) or the legacy `image_folder_path` (a single string or a list).
+    Duplicate folders are dropped while preserving order."""
+    value = raw.get("image_folders", raw.get("image_folder_path"))
+    if value is None:
+        raise KeyError("image_folders")
+    if isinstance(value, (str, Path)):
+        value = [value]
+    folders: list[Path] = []
+    for item in value:
+        folder = _resolve_path(base_dir, str(item))
+        if folder not in folders:
+            folders.append(folder)
+    if not folders:
+        raise ValueError("image_folders must list at least one folder")
+    return folders
+
+
+def config_file_path(path: str | Path | None = None) -> Path:
+    """Resolve which config file is in effect (explicit arg, env var, or default)."""
+    return Path(path or os.environ.get(CONFIG_ENV_VAR) or DEFAULT_CONFIG_PATH)
+
+
+def load_raw(path: str | Path | None = None) -> tuple[Path, dict]:
+    """Read the raw YAML mapping (untouched strings, comments dropped) plus its
+    path. Used both to build a Config and to round-trip edits back to disk."""
+    config_path = config_file_path(path)
     if not config_path.exists():
         raise FileNotFoundError(
             f"Config file not found at {config_path}. "
             f"Copy config.example.yaml to config.yaml and edit it first."
         )
-
     with open(config_path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
+    return config_path, raw
 
+
+def save_raw(config_path: Path, raw: dict) -> None:
+    """Persist a raw config mapping back to YAML. Note: PyYAML can't preserve the
+    original file's comments, so they are lost on save."""
+    with open(config_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(raw, f, allow_unicode=True, sort_keys=False, default_flow_style=False)
+
+
+def load_config(path: str | Path | None = None) -> Config:
+    config_path, raw = load_raw(path)
+    return build_config(config_path, raw)
+
+
+def build_config(config_path: Path, raw: dict) -> Config:
     base_dir = config_path.parent
 
     google_cloud = raw.get("google_cloud") or {}
@@ -63,7 +106,7 @@ def load_config(path: str | Path | None = None) -> Config:
     server = raw.get("server") or {}
 
     return Config(
-        image_folder_path=_resolve_path(base_dir, raw["image_folder_path"]),
+        image_folders=_resolve_image_folders(base_dir, raw),
         csv_path=_resolve_path(base_dir, raw["csv_path"]),
         image_name_column=raw["image_name_column"],
         file_extension=raw.get("file_extension", ""),
@@ -82,4 +125,5 @@ def load_config(path: str | Path | None = None) -> Config:
         server_host=server.get("host", "127.0.0.1"),
         server_port=int(server.get("port", 8000)),
         base_dir=base_dir,
+        config_path=config_path,
     )

@@ -405,7 +405,249 @@ els.toggleRowInfo.addEventListener("click", () => {
   els.toggleRowInfo.textContent = visible ? "Show row data ▾" : "Hide row data ▴";
 });
 
+// ---------------------------------------------------------------------------
+// Startup confirmation screen: shown once per run before labeling. Surfaces the
+// loaded config, warns about CSV images that are missing or that match more than
+// one folder, and lets the user pick the folder for each ambiguous image.
+// ---------------------------------------------------------------------------
+const setupEls = {
+  overlay: document.getElementById("setup-overlay"),
+  summary: document.getElementById("setup-summary"),
+  missing: document.getElementById("setup-missing"),
+  conflicts: document.getElementById("setup-conflicts"),
+  method: document.getElementById("setup-method-select"),
+  confirm: document.getElementById("setup-confirm"),
+};
+
+// index -> chosen folder path, for images found in multiple folders.
+const conflictChoices = {};
+
+function esc(s) {
+  return String(s).replace(/[&<>"]/g, (c) => (
+    { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]
+  ));
+}
+
+function folderLabel(path) {
+  // Last path segment is usually enough to tell folders apart at a glance.
+  const parts = String(path).replace(/\/+$/, "").split("/");
+  return parts[parts.length - 1] || path;
+}
+
+function folderRowHtml(value) {
+  return `
+    <div class="folder-row">
+      <input type="text" class="folder-input" value="${esc(value)}" placeholder="/đường/dẫn/tới/thư-mục-ảnh">
+      <button type="button" class="folder-remove" title="Xóa thư mục">✕</button>
+    </div>`;
+}
+
+function wireFolderRemoveButtons() {
+  document.querySelectorAll(".folder-remove").forEach((btn) => {
+    btn.onclick = () => {
+      const rows = document.querySelectorAll("#folder-list .folder-row");
+      if (rows.length <= 1) {
+        // Keep at least one row so the user always has somewhere to type.
+        btn.previousElementSibling.value = "";
+        return;
+      }
+      btn.parentElement.remove();
+    };
+  });
+}
+
+function collectConfigForm() {
+  return {
+    image_folders: [...document.querySelectorAll(".folder-input")]
+      .map((i) => i.value.trim())
+      .filter(Boolean),
+    csv_path: document.getElementById("cfg-csv").value.trim(),
+    image_name_column: document.getElementById("cfg-col").value.trim(),
+    file_extension: document.getElementById("cfg-ext").value,
+    original_language: document.getElementById("cfg-src").value.trim(),
+    target_language: document.getElementById("cfg-tgt").value.trim(),
+  };
+}
+
+async function applyConfig() {
+  const payload = collectConfigForm();
+  if (!payload.image_folders.length) {
+    alert("Cần ít nhất một thư mục ảnh.");
+    return;
+  }
+  const btn = document.getElementById("cfg-apply");
+  btn.disabled = true;
+  btn.textContent = "Đang quét…";
+  try {
+    const res = await fetch("/api/config/update", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const body = await res.json();
+    if (!res.ok) throw new Error(body.detail || res.statusText);
+    renderSetup(body); // re-render with the rebuilt config + fresh scan
+  } catch (err) {
+    alert("Không áp dụng được: " + err.message);
+    btn.disabled = false;
+    btn.textContent = "Áp dụng & quét lại";
+  }
+}
+
+function renderSetup(setup) {
+  const folderRows = (setup.image_folders.length ? setup.image_folders : [""])
+    .map(folderRowHtml)
+    .join("");
+  setupEls.summary.innerHTML = `
+    <div class="setup-row"><span>Tổng số ảnh trong CSV:</span><b>${setup.total}</b></div>
+    <div class="cfg-field">
+      <label>Thư mục ảnh <span class="cfg-note">(tìm ảnh trong tất cả các thư mục)</span></label>
+      <div id="folder-list">${folderRows}</div>
+      <button type="button" id="folder-add" class="cfg-add">+ Thêm thư mục</button>
+    </div>
+    <div class="cfg-field">
+      <label for="cfg-csv">File CSV</label>
+      <input type="text" id="cfg-csv" value="${esc(setup.csv_path)}">
+    </div>
+    <div class="cfg-grid">
+      <div class="cfg-field">
+        <label for="cfg-col">Cột tên ảnh</label>
+        <input type="text" id="cfg-col" value="${esc(setup.image_name_column)}">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-ext">Đuôi file ảnh</label>
+        <input type="text" id="cfg-ext" value="${esc(setup.file_extension)}" placeholder=".jpg">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-src">Ngôn ngữ gốc</label>
+        <input type="text" id="cfg-src" value="${esc(setup.original_language)}" placeholder="ja">
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-tgt">Ngôn ngữ đích</label>
+        <input type="text" id="cfg-tgt" value="${esc(setup.target_language)}" placeholder="vi">
+      </div>
+    </div>
+    <button type="button" id="cfg-apply" class="cfg-add">Áp dụng & quét lại</button>
+  `;
+  document.getElementById("folder-add").onclick = () => {
+    document.getElementById("folder-list").insertAdjacentHTML("beforeend", folderRowHtml(""));
+    wireFolderRemoveButtons();
+  };
+  document.getElementById("cfg-apply").onclick = applyConfig;
+  wireFolderRemoveButtons();
+
+  // Missing originals --------------------------------------------------------
+  const missing = setup.missing || [];
+  if (missing.length === 0) {
+    setupEls.missing.innerHTML = `<div class="setup-ok">✓ Tất cả ảnh trong CSV đều tìm thấy.</div>`;
+  } else {
+    const items = missing
+      .map((m) => `<li>#${m.index + 1} — <code>${esc(m.filename)}</code></li>`)
+      .join("");
+    setupEls.missing.innerHTML = `
+      <details class="setup-warn" open>
+        <summary>⚠ ${missing.length} ảnh KHÔNG tìm thấy trong bất kỳ thư mục nào</summary>
+        <p class="setup-hint">Các ảnh này sẽ không hiển thị được khi gán nhãn.</p>
+        <ul class="setup-list">${items}</ul>
+      </details>`;
+  }
+
+  // Conflicting originals (in more than one folder) --------------------------
+  const conflicts = setup.conflicts || [];
+  for (const key in conflictChoices) delete conflictChoices[key];
+  if (conflicts.length === 0) {
+    setupEls.conflicts.innerHTML = `<div class="setup-ok">✓ Không có ảnh nào trùng ở nhiều thư mục.</div>`;
+  } else {
+    // Quick "apply to all" by folder, plus a per-image override below.
+    const allFolders = setup.image_folders;
+    const quick = allFolders
+      .map((f) => `<option value="${esc(f)}">${esc(folderLabel(f))}</option>`)
+      .join("");
+    const rows = conflicts
+      .map((c) => {
+        conflictChoices[c.index] = c.chosen; // default = first match
+        const opts = c.candidates
+          .map(
+            (f) =>
+              `<option value="${esc(f)}" title="${esc(f)}"${f === c.chosen ? " selected" : ""}>` +
+              `${esc(folderLabel(f))}</option>`
+          )
+          .join("");
+        return `
+          <tr>
+            <td>#${c.index + 1}</td>
+            <td><code>${esc(c.filename)}</code></td>
+            <td><select class="conflict-select" data-index="${c.index}">${opts}</select></td>
+          </tr>`;
+      })
+      .join("");
+    setupEls.conflicts.innerHTML = `
+      <details class="setup-warn" open>
+        <summary>⚠ ${conflicts.length} ảnh tồn tại ở NHIỀU thư mục — chọn thư mục để trích xuất</summary>
+        <div class="setup-quick">
+          <label>Áp dụng cho tất cả (nếu có):</label>
+          <select id="conflict-apply-all"><option value="">— chọn —</option>${quick}</select>
+        </div>
+        <div class="setup-table-wrap">
+          <table class="setup-table">
+            <thead><tr><th>#</th><th>Tên ảnh</th><th>Thư mục</th></tr></thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      </details>`;
+
+    setupEls.conflicts.querySelectorAll(".conflict-select").forEach((sel) => {
+      sel.addEventListener("change", () => {
+        conflictChoices[parseInt(sel.dataset.index, 10)] = sel.value;
+      });
+    });
+    const applyAll = document.getElementById("conflict-apply-all");
+    applyAll.addEventListener("change", () => {
+      if (!applyAll.value) return;
+      setupEls.conflicts.querySelectorAll(".conflict-select").forEach((sel) => {
+        // Only switch images that actually have this folder as a candidate.
+        if ([...sel.options].some((o) => o.value === applyAll.value)) {
+          sel.value = applyAll.value;
+          conflictChoices[parseInt(sel.dataset.index, 10)] = applyAll.value;
+        }
+      });
+    });
+  }
+
+  setupEls.method.value = setup.translation_method;
+}
+
+async function confirmSetup() {
+  setupEls.confirm.disabled = true;
+  setupEls.confirm.textContent = "Đang khởi tạo…";
+  try {
+    const res = await fetch("/api/confirm", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ method: setupEls.method.value, choices: conflictChoices }),
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      throw new Error(body.detail || res.statusText);
+    }
+    const state = await res.json();
+    setupEls.overlay.style.display = "none";
+    await refreshFromState(state);
+  } catch (err) {
+    alert("Không thể bắt đầu: " + err.message);
+    setupEls.confirm.disabled = false;
+    setupEls.confirm.textContent = "Bắt đầu gán nhãn ▶";
+  }
+}
+
+setupEls.confirm.addEventListener("click", confirmSetup);
+
 (async function init() {
-  const state = await fetchState();
-  await refreshFromState(state);
+  const setup = await fetchSetup();
+  renderSetup(setup);
 })();
+
+async function fetchSetup() {
+  const res = await fetch("/api/setup");
+  return res.json();
+}

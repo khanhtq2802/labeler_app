@@ -1,8 +1,12 @@
 # Copy this file to config.yaml and edit the values for your machine.
 
 # Where the invoice images live, and the CSV that defines labeling order.
-image_folder_path: "/home/khanhtq3/projects/FLSK_2026_Q2/data/Mecharant/train_image_070426"
-csv_path: "/home/khanhtq3/Downloads/data/prelabel_results.csv"
+# image_folders accepts one or more folders. If a CSV image is found in more
+# than one folder you'll be asked which to use; if it's in none you'll be warned.
+# (The legacy single-folder key `image_folder_path: "..."` still works.)
+image_folders:
+  - "/path/to/your/images"
+csv_path: "/path/to/your/labels.csv"
 
 # Column in the CSV that holds the image filename.
 image_name_column: "image_file_name"
