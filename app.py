@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import json
 import logging
 import threading
 from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 from pydantic import BaseModel
@@ -543,7 +544,8 @@ class AskAIRequest(BaseModel):
 @app.post("/api/ai/ask")
 def ask_ai(req: AskAIRequest):
     """Crop the selected region of the current original image and ask the
-    configured model the question, returning its text answer."""
+    configured model the question, streaming its text answer back as NDJSON
+    (one `{"delta": ...}` object per chunk, or `{"error": ...}` on failure)."""
     _require_dataset()
     if not 0 <= req.index < len(dataset):
         raise HTTPException(404, "Index out of range")
@@ -552,14 +554,18 @@ def ask_ai(req: AskAIRequest):
         raise HTTPException(404, f"Image file not found: {image_path}")
 
     box = {"x": req.x, "y": req.y, "w": req.w, "h": req.h}
-    try:
-        answer = ai.ask_about_region(cfg, image_path, box, req.question)
-    except ai.AIError as exc:
-        raise HTTPException(400, str(exc))
-    except Exception as exc:
-        logger.exception("AI ask failed for index %d", req.index)
-        raise HTTPException(500, f"AI thất bại: {exc}")
-    return {"answer": answer}
+
+    def gen():
+        try:
+            for chunk in ai.ask_about_region_stream(cfg, image_path, box, req.question):
+                yield json.dumps({"delta": chunk}, ensure_ascii=False) + "\n"
+        except ai.AIError as exc:
+            yield json.dumps({"error": str(exc)}, ensure_ascii=False) + "\n"
+        except Exception as exc:
+            logger.exception("AI ask failed for index %d", req.index)
+            yield json.dumps({"error": f"AI thất bại: {exc}"}, ensure_ascii=False) + "\n"
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")
