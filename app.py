@@ -10,25 +10,95 @@ from fastapi.staticfiles import StaticFiles
 from PIL import Image, ImageOps
 from pydantic import BaseModel
 
-from config import Config, build_config, load_config, load_raw, save_raw
+from config import (
+    Config,
+    build_config,
+    config_file_path,
+    load_raw_or_default,
+    save_raw,
+)
 from dataset import Dataset, StateStore
 from translators import ManualTranslationPending, get_translator
+import ai
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("labeler")
 
 app = FastAPI(title="Invoice Labeler")
 
-cfg: Config = load_config()
-dataset = Dataset(cfg)
+# These are (re)assigned by _load_runtime_state(). The app boots even when
+# config.yaml is missing or broken: `cfg` always ends up usable (falling back to
+# the template defaults) so the server and setup screen can run, while `dataset`
+# is left None and `setup_error` describes what the user must fix in the web UI.
+cfg: Config
+dataset: Dataset | None = None
+setup_error: str | None = None
+
+
+# A path that never exists, used to force load_raw_or_default() to fall back to
+# the template defaults regardless of any (broken) config.yaml on disk.
+_NONEXISTENT_CONFIG = config_file_path().with_name("__labeler_no_such_config__.yaml")
+
+
+def _ensure_dirs() -> None:
+    cfg.cache_folder.mkdir(parents=True, exist_ok=True)
+    cfg.rotated_folder.mkdir(parents=True, exist_ok=True)
+
+
+def _load_runtime_state(path=None) -> None:
+    """(Re)load config + dataset into the module globals, tolerating a missing or
+    invalid config.yaml. On any problem, `cfg` is left as a usable config (the
+    template defaults when the file itself can't be built) and `dataset` is None
+    with `setup_error` set, so the UI opens on the setup screen instead of the
+    process crashing at import time."""
+    global cfg, dataset, setup_error
+    try:
+        config_path, raw, exists = load_raw_or_default(path)
+        cfg = build_config(config_path, raw)
+    except Exception as exc:
+        # config.yaml is present but can't even be parsed/built (e.g. malformed
+        # YAML or missing required keys); fall back to the template defaults,
+        # ignoring the broken file, so the server still starts into the setup
+        # screen instead of crashing at import time.
+        config_path = config_file_path(path)
+        _, template_raw, _ = load_raw_or_default(_NONEXISTENT_CONFIG)
+        cfg = build_config(config_path, template_raw)
+        dataset = None
+        setup_error = f"config.yaml không hợp lệ: {exc}"
+        _ensure_dirs()
+        return
+
+    _ensure_dirs()
+    if not exists:
+        dataset = None
+        setup_error = (
+            "Chưa có config.yaml. Điền cấu hình bên dưới rồi nhấn "
+            "“Áp dụng & quét lại” để tạo file."
+        )
+        return
+    try:
+        dataset = Dataset(cfg)
+        setup_error = None
+    except Exception as exc:
+        dataset = None
+        setup_error = f"Không đọc được dữ liệu: {exc}"
+
+
+_load_runtime_state()
 state = StateStore(cfg.state_file)
-cfg.cache_folder.mkdir(parents=True, exist_ok=True)
-cfg.rotated_folder.mkdir(parents=True, exist_ok=True)
 
 # Mutable at runtime via /api/method, without touching config.yaml.
 # `confirmed` gates labeling behind the startup confirmation screen; it resets to
 # False on every server start so the config is re-confirmed each run.
 runtime = {"method": cfg.translation_method, "confirmed": False}
+
+
+def _require_dataset() -> Dataset:
+    """Endpoints that need labeled data fail clearly (409) until the config is
+    valid, instead of raising an opaque error against a None dataset."""
+    if dataset is None:
+        raise HTTPException(409, setup_error or "Cấu hình chưa sẵn sàng.")
+    return dataset
 
 
 def cache_path_for(index: int) -> Path:
@@ -162,6 +232,7 @@ def _state_payload(index: int) -> dict:
 
 @app.get("/api/state")
 def get_state(background_tasks: BackgroundTasks):
+    _require_dataset()
     # Clamp first: a stale state file can point past the end of a smaller CSV.
     index = state.clamp(len(dataset))
     _queue_prefetch(background_tasks, index)
@@ -170,19 +241,32 @@ def get_state(background_tasks: BackgroundTasks):
 
 def _setup_payload() -> dict:
     """Everything the startup confirmation screen needs: the (editable) config plus
-    a scan of which CSV images are missing or ambiguous across the image folders."""
-    report = dataset.scan_report()
+    a scan of which CSV images are missing or ambiguous across the image folders.
+    Works even before the config is valid: when there's no dataset yet, the scan
+    is empty and `ready` is False so the UI keeps the user on the config form."""
+    if dataset is not None:
+        report = dataset.scan_report()
+        total = len(dataset)
+    else:
+        report = {"missing": [], "conflicts": []}
+        total = 0
+    csv_path = str(cfg.csv_path)
     return {
         "image_folders": [str(f) for f in cfg.image_folders],
-        "csv_path": str(cfg.csv_path),
+        "csv_path": "" if csv_path == "." else csv_path,
         "image_name_column": cfg.image_name_column,
         "file_extension": cfg.file_extension,
         "original_language": cfg.original_language,
         "target_language": cfg.target_language,
         "translation_method": runtime["method"],
-        "total": len(dataset),
+        "ai_provider": cfg.ai_provider,
+        "ai_model": cfg.ai_model,
+        "ai_default_question": cfg.ai_default_question,
+        "total": total,
         "missing": report["missing"],
         "conflicts": report["conflicts"],
+        "ready": dataset is not None,
+        "error": setup_error,
     }
 
 
@@ -198,6 +282,9 @@ class ConfigUpdateRequest(BaseModel):
     file_extension: str = ""
     original_language: str = "ja"
     target_language: str = "vi"
+    ai_provider: str = "claude"
+    ai_model: str = ""
+    ai_default_question: str = ""
 
 
 @app.post("/api/config/update")
@@ -205,14 +292,15 @@ def update_config(req: ConfigUpdateRequest):
     """Apply edits made on the confirmation screen: rebuild config + dataset in
     memory, persist to config.yaml, and return a fresh scan. The new config is
     validated (config built, CSV loaded) BEFORE anything is written or swapped in,
-    so a bad edit can't corrupt the file or break the running app."""
-    global cfg, dataset
+    so a bad edit can't corrupt the file or break the running app. Also creates
+    config.yaml from scratch (seeded from the template) when none exists yet."""
+    global cfg, dataset, setup_error
 
     folders = [f.strip() for f in req.image_folders if f.strip()]
     if not folders:
         raise HTTPException(400, "Cần ít nhất một thư mục ảnh.")
 
-    config_path, raw = load_raw()
+    config_path, raw, _ = load_raw_or_default()
     new_raw = dict(raw)
     new_raw.pop("image_folder_path", None)  # migrate the legacy key away
     new_raw["image_folders"] = folders
@@ -221,6 +309,17 @@ def update_config(req: ConfigUpdateRequest):
     new_raw["file_extension"] = req.file_extension
     new_raw["original_language"] = req.original_language.strip()
     new_raw["target_language"] = req.target_language.strip()
+    # Merge the editable AI fields, preserving the file-only keys (use_aiauth,
+    # aiauth_host/port, api_key, base_url, max_tokens). An empty model is dropped
+    # so build_config falls back to its default rather than persisting "".
+    ai_raw = dict(raw.get("ai") or {})
+    ai_raw["provider"] = req.ai_provider.strip() or "claude"
+    if req.ai_model.strip():
+        ai_raw["model"] = req.ai_model.strip()
+    else:
+        ai_raw.pop("model", None)
+    ai_raw["default_question"] = req.ai_default_question
+    new_raw["ai"] = ai_raw
 
     try:
         new_cfg = build_config(config_path, new_raw)
@@ -231,8 +330,8 @@ def update_config(req: ConfigUpdateRequest):
     save_raw(config_path, new_raw)
     cfg = new_cfg
     dataset = new_dataset
-    cfg.cache_folder.mkdir(parents=True, exist_ok=True)
-    cfg.rotated_folder.mkdir(parents=True, exist_ok=True)
+    setup_error = None
+    _ensure_dirs()
     return _setup_payload()
 
 
@@ -246,10 +345,11 @@ class ConfirmRequest(BaseModel):
 def confirm_setup(req: ConfirmRequest):
     """Apply the user's folder choices for ambiguous images, optionally update the
     translation method, and unlock labeling for this run."""
+    _require_dataset()
     for index, folder in req.choices.items():
         if 0 <= index < len(dataset):
             dataset.set_choice(index, Path(folder))
-    if req.method in ("google_cloud", "free", "manual"):
+    if req.method in ("google_cloud", "manual"):
         runtime["method"] = req.method
     runtime["confirmed"] = True
     index = state.clamp(len(dataset))
@@ -263,6 +363,7 @@ class NavigateRequest(BaseModel):
 
 @app.post("/api/navigate")
 def navigate(req: NavigateRequest, background_tasks: BackgroundTasks):
+    _require_dataset()
     total = len(dataset)
     if req.action == "next":
         new_index = state.index + 1
@@ -286,7 +387,7 @@ class MethodRequest(BaseModel):
 
 @app.post("/api/method")
 def set_method(req: MethodRequest):
-    if req.method not in ("google_cloud", "free", "manual"):
+    if req.method not in ("google_cloud", "manual"):
         raise HTTPException(400, f"Unknown method '{req.method}'")
     runtime["method"] = req.method
     return {"translation_method": runtime["method"]}
@@ -294,6 +395,7 @@ def set_method(req: MethodRequest):
 
 @app.get("/images/original/{index}")
 def get_original_image(index: int):
+    _require_dataset()
     if not 0 <= index < len(dataset):
         raise HTTPException(404, "Index out of range")
     image_path = working_original_path(index)
@@ -304,6 +406,7 @@ def get_original_image(index: int):
 
 @app.get("/images/translated/{index}")
 def get_translated_image(index: int):
+    _require_dataset()
     if not 0 <= index < len(dataset):
         raise HTTPException(404, "Index out of range")
 
@@ -340,6 +443,7 @@ def manual_auto(index: int, background_tasks: BackgroundTasks):
     original image, then screenshot the translated result into the cache so the
     Translated panel can show it like any other method. Once the current image is
     done, kick off a second-tab prefetch of the next one."""
+    _require_dataset()
     if not 0 <= index < len(dataset):
         raise HTTPException(404, "Index out of range")
     image_path = working_original_path(index)
@@ -371,6 +475,7 @@ class RotateRequest(BaseModel):
 def rotate_image(index: int, req: RotateRequest):
     """Bake a rotation into a saved copy of the original (never touching the
     source file), drop the stale translation, and re-translate the new orientation."""
+    _require_dataset()
     if not 0 <= index < len(dataset):
         raise HTTPException(404, "Index out of range")
     src = working_original_path(index)
@@ -412,6 +517,49 @@ def get_config():
         "translation_method": runtime["method"],
         "cache_folder": str(cfg.cache_folder),
     }
+
+
+@app.get("/api/ai/config")
+def get_ai_config():
+    """What the Original-panel AI box needs: which provider/model is active and
+    the default question to pre-fill into the prompt."""
+    return {
+        "provider": cfg.ai_provider,
+        "model": cfg.ai_model,
+        "default_question": cfg.ai_default_question,
+    }
+
+
+class AskAIRequest(BaseModel):
+    index: int
+    # Crop box in ORIGINAL-image pixel coordinates (the served original file).
+    x: float
+    y: float
+    w: float
+    h: float
+    question: str = ""
+
+
+@app.post("/api/ai/ask")
+def ask_ai(req: AskAIRequest):
+    """Crop the selected region of the current original image and ask the
+    configured model the question, returning its text answer."""
+    _require_dataset()
+    if not 0 <= req.index < len(dataset):
+        raise HTTPException(404, "Index out of range")
+    image_path = working_original_path(req.index)
+    if not image_path.exists():
+        raise HTTPException(404, f"Image file not found: {image_path}")
+
+    box = {"x": req.x, "y": req.y, "w": req.w, "h": req.h}
+    try:
+        answer = ai.ask_about_region(cfg, image_path, box, req.question)
+    except ai.AIError as exc:
+        raise HTTPException(400, str(exc))
+    except Exception as exc:
+        logger.exception("AI ask failed for index %d", req.index)
+        raise HTTPException(500, f"AI thất bại: {exc}")
+    return {"answer": answer}
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).parent / "static", html=True), name="static")

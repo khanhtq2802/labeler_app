@@ -19,8 +19,8 @@ file_extension: ".jpg"
 original_language: "ja"
 target_language: "vi"
 
-# How translated overlays get produced: google_cloud | free | manual
-# google_cloud and free are still in development and may not work well. manual just opens Google Translate in a browser tab for you to copy-paste from.
+# How translated overlays get produced: google_cloud | manual
+# google_cloud is still in development and may not work well. manual just opens Google Translate in a browser tab for you to copy-paste from.
 translation_method: "manual"
 
 # Where translated images are cached so we never re-translate the same file.
@@ -43,11 +43,6 @@ google_cloud:
   # Alternatively, set the GOOGLE_APPLICATION_CREDENTIALS env var and leave this blank.
   credentials_json: ""
 
-free:
-  # Tesseract language code for the source language (install with e.g.
-  # `sudo apt install tesseract-ocr tesseract-ocr-jpn tesseract-ocr-jpn-vert`)
-  tesseract_lang: "jpn"
-
 manual:
   # URL opened when you click "Open in Google Translate". sl/tl are pre-filled.
   translate_url: "https://translate.google.com/?sl={source}&tl={target}&op=images"
@@ -55,3 +50,30 @@ manual:
 server:
   host: "127.0.0.1"
   port: 8000
+
+# AI reference assistant. In the "Original" panel you can drag a box over a
+# region, click "Ask AI", and a model answers about just that crop. Use
+# "Edit question" to change the prompt for a single ask; the default below is
+# pre-filled each time.
+ai:
+  # claude (Anthropic) or openai. claude is recommended (better vision).
+  provider: "claude"
+  # claude-opus-4-8 / claude-sonnet-4-6 for Claude; e.g. gpt-5.5 for openai.
+  model: "claude-opus-4-8"
+
+  # Route calls through a locally-running aiauth proxy so no API key is needed —
+  # it reuses your Claude Code / Codex subscription token. Start it first with:
+  #     aiauth serve            # leave running at 127.0.0.1:8787
+  # (see https://github.com/khanhtq2802/aiauth). Set use_aiauth: false to call
+  # the provider directly with api_key/base_url instead.
+  use_aiauth: true
+  aiauth_host: "127.0.0.1"
+  aiauth_port: 8787
+
+  # Only used when use_aiauth: false.
+  api_key: ""
+  base_url: ""
+
+  # Pre-filled prompt for each "Ask AI"; editable per-question in the UI.
+  default_question: "Hãy dịch từng phần nội dung trong vùng được chọn sang tiếng Việt và phân tích ý nghĩa của chúng."
+  max_tokens: 1024

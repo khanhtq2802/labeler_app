@@ -8,10 +8,11 @@ pyyaml
 # After installing, run: playwright install chromium   (or it uses system Chrome)
 playwright
 
-# Needed only for translation_method: free
-pytesseract
-deep-translator
-
 # Needed only for translation_method: google_cloud
 google-cloud-vision
 google-cloud-translate
+
+# Needed for the "Ask AI" reference feature (ai.provider: claude). Install
+# 'openai' instead/as well if you set ai.provider: openai. Calls route through
+# the local aiauth proxy by default (no API key) — https://github.com/khanhtq2802/aiauth
+anthropic

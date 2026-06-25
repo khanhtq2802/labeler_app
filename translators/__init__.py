@@ -3,13 +3,11 @@ from __future__ import annotations
 from config import Config
 
 from .base import BaseTranslator, ManualTranslationPending
-from .free_ocr import FreeOcrTranslator
 from .google_cloud import GoogleCloudTranslator
 from .manual import ManualTranslator
 
 _METHODS = {
     "google_cloud": GoogleCloudTranslator,
-    "free": FreeOcrTranslator,
     "manual": ManualTranslator,
 }
 

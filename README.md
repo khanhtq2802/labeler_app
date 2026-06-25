@@ -32,13 +32,6 @@ how new (uncached) images get translated.
   env var). Costs a small amount per image.
   `pip install google-cloud-vision google-cloud-translate`
 
-- **`free`** — Local Tesseract OCR + the free/unofficial Google Translate
-  endpoint (`deep-translator`). No account needed, lower accuracy,
-  especially on stylised receipt fonts. Requires the Tesseract binary and
-  the Japanese language pack:
-  `sudo apt install tesseract-ocr tesseract-ocr-jpn tesseract-ocr-jpn-vert`
-  `pip install pytesseract deep-translator`
-
 - **`manual`** — There's no public API for Google Translate's image-overlay
   feature, so this mode drives a real Chrome window with Playwright: it opens
   `translate.google.com/?sl=…&tl=…&op=images` and auto-uploads the original
@@ -51,6 +44,34 @@ Translations are cached on disk under `cache_folder` keyed by filename +
 target language, so switching methods won't retranslate images you already
 have cached. Delete the relevant file in the cache folder to force a
 re-translation.
+
+## AI reference (Ask AI)
+
+In the **Original** panel, click **🤖 AI** to show a box you can drag and
+resize over any region of the image. Hit **Ask AI** and the app crops just that
+region and sends it (plus a question) to a vision model; the answer appears on
+the box. **Edit question** changes the prompt for a single ask — handy for
+"translate each part and explain" style questions on a specific stamp, total, or
+handwritten note. While the box is active the image is frozen (no zoom/pan) so
+the selection stays put, and the mouse wheel scrolls the answer instead.
+
+Provider, model, and the default question are set under the `ai:` block in
+`config.yaml` and can also be edited at runtime on the startup confirmation
+screen.
+
+By default, calls route through the **aiauth** proxy
+(<https://github.com/khanhtq2802/aiauth>), which reuses your Claude Code / Codex
+subscription token — **no API key needed**. To use it:
+
+```bash
+pip install anthropic        # (or 'openai' if ai.provider: openai)
+# install aiauth from https://github.com/khanhtq2802/aiauth, then leave it running:
+aiauth serve                 # http://127.0.0.1:8787
+```
+
+Prefer a direct API key instead? Set `ai.use_aiauth: false` and fill in
+`ai.api_key` (and optionally `ai.base_url`) in `config.yaml`. See
+`config.example.yaml` for all `ai:` options.
 
 ## Config fields
 

@@ -165,6 +165,7 @@ document.querySelectorAll(".controls button").forEach((btn) => {
     if (action === "rotate-left") { rotateView(-90); return; }
     if (action === "rotate-right") { rotateView(90); return; }
     if (action === "commit-rotate") { commitRotate(); return; }
+    if (action === "ai-toggle") { toggleAIBox(); return; }
   });
 });
 
@@ -172,6 +173,9 @@ document.querySelectorAll(".controls button").forEach((btn) => {
   el.addEventListener(
     "wheel",
     (e) => {
+      // While the AI box is active the image is frozen; let the wheel scroll the
+      // AI answer natively (don't preventDefault) instead of zooming.
+      if (aiLocked()) return;
       e.preventDefault();
       const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
       const rect = el.getBoundingClientRect();
@@ -188,6 +192,7 @@ document.querySelectorAll(".controls button").forEach((btn) => {
   let lastX = 0;
   let lastY = 0;
   el.addEventListener("pointerdown", (e) => {
+    if (aiLocked()) return; // image is frozen while the AI box is active
     dragging = true;
     lastX = e.clientX;
     lastY = e.clientY;
@@ -466,6 +471,9 @@ function collectConfigForm() {
     file_extension: document.getElementById("cfg-ext").value,
     original_language: document.getElementById("cfg-src").value.trim(),
     target_language: document.getElementById("cfg-tgt").value.trim(),
+    ai_provider: document.getElementById("cfg-ai-provider").value,
+    ai_model: document.getElementById("cfg-ai-model").value.trim(),
+    ai_default_question: document.getElementById("cfg-ai-question").value,
   };
 }
 
@@ -487,6 +495,9 @@ async function applyConfig() {
     const body = await res.json();
     if (!res.ok) throw new Error(body.detail || res.statusText);
     renderSetup(body); // re-render with the rebuilt config + fresh scan
+    // Pick up the just-saved AI provider/model/default question for the Ask AI box.
+    aiQuestion = null;
+    loadAIConfig();
   } catch (err) {
     alert("Không áp dụng được: " + err.message);
     btn.disabled = false;
@@ -498,7 +509,11 @@ function renderSetup(setup) {
   const folderRows = (setup.image_folders.length ? setup.image_folders : [""])
     .map(folderRowHtml)
     .join("");
+  const errHtml = setup.error
+    ? `<div class="setup-error">⚠ ${esc(setup.error)}</div>`
+    : "";
   setupEls.summary.innerHTML = `
+    ${errHtml}
     <div class="setup-row"><span>Tổng số ảnh trong CSV:</span><b>${setup.total}</b></div>
     <div class="cfg-field">
       <label>Thư mục ảnh <span class="cfg-note">(tìm ảnh trong tất cả các thư mục)</span></label>
@@ -525,6 +540,26 @@ function renderSetup(setup) {
       <div class="cfg-field">
         <label for="cfg-tgt">Ngôn ngữ đích</label>
         <input type="text" id="cfg-tgt" value="${esc(setup.target_language)}" placeholder="vi">
+      </div>
+    </div>
+    <div class="cfg-field">
+      <label>AI tham khảo <span class="cfg-note">(nút 🤖 AI ở panel Original)</span></label>
+      <div class="cfg-grid">
+        <div class="cfg-field">
+          <label for="cfg-ai-provider">Provider</label>
+          <select id="cfg-ai-provider">
+            <option value="claude"${(setup.ai_provider || "claude") === "claude" ? " selected" : ""}>Claude (Anthropic)</option>
+            <option value="openai"${setup.ai_provider === "openai" ? " selected" : ""}>OpenAI / Codex</option>
+          </select>
+        </div>
+        <div class="cfg-field">
+          <label for="cfg-ai-model">Model</label>
+          <input type="text" id="cfg-ai-model" value="${esc(setup.ai_model || "")}" placeholder="claude-opus-4-8">
+        </div>
+      </div>
+      <div class="cfg-field">
+        <label for="cfg-ai-question">Câu hỏi mặc định</label>
+        <textarea id="cfg-ai-question" rows="2">${esc(setup.ai_default_question || "")}</textarea>
       </div>
     </div>
     <button type="button" id="cfg-apply" class="cfg-add">Áp dụng & quét lại</button>
@@ -615,6 +650,12 @@ function renderSetup(setup) {
   }
 
   setupEls.method.value = setup.translation_method;
+
+  // Gate "start labeling" until the config is valid and the dataset has loaded.
+  // Before that, the only useful action is editing the config and re-scanning.
+  const ready = setup.ready !== false && setup.total > 0;
+  setupEls.confirm.disabled = !ready;
+  setupEls.confirm.title = ready ? "" : "Hãy áp dụng cấu hình hợp lệ trước khi bắt đầu.";
 }
 
 async function confirmSetup() {
@@ -643,6 +684,7 @@ async function confirmSetup() {
 setupEls.confirm.addEventListener("click", confirmSetup);
 
 (async function init() {
+  loadAIConfig();
   const setup = await fetchSetup();
   renderSetup(setup);
 })();
@@ -651,3 +693,239 @@ async function fetchSetup() {
   const res = await fetch("/api/setup");
   return res.json();
 }
+
+// ---------------------------------------------------------------------------
+// AI reference box (Original panel). Drag/resize a box over a region, then
+// "Ask AI" sends that crop + a question to a vision model and shows the answer.
+// The box lives in viewport (screen) coordinates; on "Ask AI" we map its corners
+// back into original-image pixels using the same geometry that renders the image.
+// ---------------------------------------------------------------------------
+const aiEls = {
+  box: document.getElementById("ai-box"),
+  ask: document.getElementById("ai-ask"),
+  editQ: document.getElementById("ai-edit-q"),
+  answer: document.getElementById("ai-answer"),
+};
+
+let aiDefaultQuestion = "";
+let aiQuestion = null; // current (possibly user-edited) question; null until config loads
+
+async function loadAIConfig() {
+  try {
+    const res = await fetch("/api/ai/config");
+    if (!res.ok) return;
+    const cfg = await res.json();
+    aiDefaultQuestion = cfg.default_question || "";
+    if (aiQuestion === null) aiQuestion = aiDefaultQuestion;
+  } catch (_) {
+    /* AI is optional; leave defaults empty */
+  }
+}
+
+function aiToggleBtn() {
+  return document.querySelector('[data-action="ai-toggle"]');
+}
+
+// True while the AI box is shown — used to freeze image zoom/pan so the box's
+// screen position keeps mapping to the same image pixels.
+function aiLocked() {
+  return aiEls && aiEls.box && !aiEls.box.hidden;
+}
+
+// Disable every panel control button (zoom/rotate/solo/commit on both panels)
+// except the AI toggle, so the shared view can't shift under the box.
+function setControlsLocked(locked) {
+  document.querySelectorAll(".controls button").forEach((btn) => {
+    if (btn.dataset.action === "ai-toggle") return;
+    btn.disabled = locked;
+  });
+}
+
+function toggleAIBox() {
+  if (aiEls.box.hidden) showAIBox();
+  else hideAIBox();
+}
+
+function showAIBox() {
+  const vp = els.viewportOriginal;
+  const vw = vp.clientWidth;
+  const vh = vp.clientHeight;
+  const w = Math.max(80, vw * 0.4);
+  const h = Math.max(60, vh * 0.3);
+  setAIBoxRect((vw - w) / 2, (vh - h) / 2, w, h);
+  aiEls.box.hidden = false;
+  aiToggleBtn().classList.add("active");
+  setControlsLocked(true);
+}
+
+function hideAIBox() {
+  aiEls.box.hidden = true;
+  hideAIAnswer();
+  aiToggleBtn().classList.remove("active");
+  setControlsLocked(false);
+}
+
+// Place/clamp the box (viewport-px coords) so it stays inside the viewport.
+function setAIBoxRect(left, top, width, height) {
+  const vp = els.viewportOriginal;
+  width = Math.max(20, width);
+  height = Math.max(20, height);
+  left = Math.min(Math.max(0, left), Math.max(0, vp.clientWidth - width));
+  top = Math.min(Math.max(0, top), Math.max(0, vp.clientHeight - height));
+  aiEls.box.style.left = `${left}px`;
+  aiEls.box.style.top = `${top}px`;
+  aiEls.box.style.width = `${width}px`;
+  aiEls.box.style.height = `${height}px`;
+}
+
+function resizeAIBox(dir, rect, dx, dy) {
+  let { left, top, width, height } = rect;
+  if (dir.includes("e")) width = rect.width + dx;
+  if (dir.includes("s")) height = rect.height + dy;
+  if (dir.includes("w")) { width = rect.width - dx; left = rect.left + dx; }
+  if (dir.includes("n")) { height = rect.height - dy; top = rect.top + dy; }
+  if (width < 20) { if (dir.includes("w")) left = rect.left + rect.width - 20; width = 20; }
+  if (height < 20) { if (dir.includes("n")) top = rect.top + rect.height - 20; height = 20; }
+  setAIBoxRect(left, top, width, height);
+}
+
+// Drag the body to move; drag a corner handle to resize. stopPropagation keeps
+// the viewport's pan handler from also firing.
+aiEls.box.addEventListener("pointerdown", (e) => {
+  if (e.target.closest(".ai-box-toolbar") || e.target.closest(".ai-answer")) {
+    e.stopPropagation();
+    return;
+  }
+  e.stopPropagation();
+  e.preventDefault();
+  const dir = e.target.dataset.dir || null;
+  const startX = e.clientX;
+  const startY = e.clientY;
+  const rect = {
+    left: aiEls.box.offsetLeft,
+    top: aiEls.box.offsetTop,
+    width: aiEls.box.offsetWidth,
+    height: aiEls.box.offsetHeight,
+  };
+  aiEls.box.setPointerCapture(e.pointerId);
+  const onMove = (ev) => {
+    const dx = ev.clientX - startX;
+    const dy = ev.clientY - startY;
+    if (dir) resizeAIBox(dir, rect, dx, dy);
+    else setAIBoxRect(rect.left + dx, rect.top + dy, rect.width, rect.height);
+  };
+  const onUp = () => {
+    aiEls.box.releasePointerCapture(e.pointerId);
+    aiEls.box.removeEventListener("pointermove", onMove);
+    aiEls.box.removeEventListener("pointerup", onUp);
+    aiEls.box.removeEventListener("pointercancel", onUp);
+  };
+  aiEls.box.addEventListener("pointermove", onMove);
+  aiEls.box.addEventListener("pointerup", onUp);
+  aiEls.box.addEventListener("pointercancel", onUp);
+});
+
+// Invert the render transform: viewport point → original-image pixel.
+function viewportToImage(vx, vy) {
+  const g = geom("original");
+  if (!g) return null;
+  const cx0 = g.ox + g.dispW / 2;
+  const cy0 = g.oy + g.dispH / 2;
+  const dx = vx - cx0;
+  const dy = vy - cy0;
+  const rad = (-g.r * Math.PI) / 180;
+  const cos = Math.cos(rad);
+  const sin = Math.sin(rad);
+  const ux = dx * cos - dy * sin;
+  const uy = dx * sin + dy * cos;
+  return { ix: ux / g.scale + g.W / 2, iy: uy / g.scale + g.H / 2 };
+}
+
+// The box's region in original-image pixels (axis-aligned bbox of its 4 mapped
+// corners), clamped to the image. null if the box isn't over the image.
+function aiBoxImageRect() {
+  const g = geom("original");
+  if (!g) return null;
+  const left = aiEls.box.offsetLeft;
+  const top = aiEls.box.offsetTop;
+  const right = left + aiEls.box.offsetWidth;
+  const bottom = top + aiEls.box.offsetHeight;
+  const corners = [
+    [left, top], [right, top], [left, bottom], [right, bottom],
+  ].map(([x, y]) => viewportToImage(x, y));
+  if (corners.some((c) => !c)) return null;
+
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  for (const c of corners) {
+    minX = Math.min(minX, c.ix);
+    minY = Math.min(minY, c.iy);
+    maxX = Math.max(maxX, c.ix);
+    maxY = Math.max(maxY, c.iy);
+  }
+  minX = Math.max(0, Math.min(g.W, minX));
+  maxX = Math.max(0, Math.min(g.W, maxX));
+  minY = Math.max(0, Math.min(g.H, minY));
+  maxY = Math.max(0, Math.min(g.H, maxY));
+  const w = maxX - minX;
+  const h = maxY - minY;
+  if (w < 2 || h < 2) return null;
+  return { x: Math.round(minX), y: Math.round(minY), w: Math.round(w), h: Math.round(h) };
+}
+
+function showAIAnswer(text, isError) {
+  aiEls.answer.innerHTML = "";
+  const close = document.createElement("button");
+  close.className = "ai-answer-close";
+  close.type = "button";
+  close.textContent = "✕";
+  close.title = "Đóng";
+  close.addEventListener("click", (e) => { e.stopPropagation(); hideAIAnswer(); });
+  const body = document.createElement("div");
+  if (isError) body.className = "ai-answer-err";
+  body.textContent = text;
+  aiEls.answer.appendChild(close);
+  aiEls.answer.appendChild(body);
+  aiEls.answer.hidden = false;
+}
+
+function hideAIAnswer() {
+  aiEls.answer.hidden = true;
+  aiEls.answer.innerHTML = "";
+}
+
+function editQuestion() {
+  const current = aiQuestion != null ? aiQuestion : aiDefaultQuestion;
+  const next = window.prompt("Câu hỏi gửi cho AI:", current);
+  if (next !== null) aiQuestion = next;
+}
+
+async function askAI() {
+  const rect = aiBoxImageRect();
+  if (!rect) {
+    showAIAnswer("Vùng chọn không nằm trên ảnh — hãy kéo khung vào phần cần hỏi.", true);
+    return;
+  }
+  const question = aiQuestion != null ? aiQuestion : aiDefaultQuestion;
+  aiEls.ask.disabled = true;
+  const prevLabel = aiEls.ask.textContent;
+  aiEls.ask.textContent = "Đang hỏi…";
+  showAIAnswer("Đang hỏi AI…", false);
+  try {
+    const res = await fetch("/api/ai/ask", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index: currentIndex, ...rect, question }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.detail || res.statusText);
+    showAIAnswer(body.answer || "(trống)", false);
+  } catch (err) {
+    showAIAnswer("Lỗi: " + err.message, true);
+  } finally {
+    aiEls.ask.disabled = false;
+    aiEls.ask.textContent = prevLabel;
+  }
+}
+
+aiEls.ask.addEventListener("click", (e) => { e.stopPropagation(); askAI(); });
+aiEls.editQ.addEventListener("click", (e) => { e.stopPropagation(); editQuestion(); });

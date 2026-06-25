@@ -20,7 +20,6 @@
         <label for="setup-method-select">Phương thức dịch:</label>
         <select id="setup-method-select">
           <option value="google_cloud">Google Cloud (paid)</option>
-          <option value="free">Free OCR</option>
           <option value="manual">Manual / browser</option>
         </select>
       </div>
@@ -46,7 +45,6 @@
       <label for="method">Translation:</label>
       <select id="method">
         <option value="google_cloud">Google Cloud (paid)</option>
-        <option value="free">Free OCR</option>
         <option value="manual">Manual / browser</option>
       </select>
     </div>
@@ -66,10 +64,22 @@
           <button data-action="rotate-left" data-target="original" title="Xoay trái 90°">⟲</button>
           <button data-action="rotate-right" data-target="original" title="Xoay phải 90°">⟳</button>
           <button data-action="commit-rotate" data-target="original" title="Lưu góc xoay vào file gốc & dịch lại">💾</button>
+          <button data-action="ai-toggle" data-target="original" title="Hỏi AI về vùng được chọn">🤖 AI</button>
         </div>
       </div>
       <div class="image-viewport" id="viewport-original">
         <img id="img-original" alt="original invoice">
+        <div id="ai-box" class="ai-box" hidden>
+          <div class="ai-box-toolbar">
+            <button id="ai-ask" type="button">Ask AI</button>
+            <button id="ai-edit-q" type="button" title="Sửa câu hỏi cho lần hỏi này">Edit question</button>
+          </div>
+          <span class="ai-handle ai-handle-nw" data-dir="nw"></span>
+          <span class="ai-handle ai-handle-ne" data-dir="ne"></span>
+          <span class="ai-handle ai-handle-sw" data-dir="sw"></span>
+          <span class="ai-handle ai-handle-se" data-dir="se"></span>
+          <div id="ai-answer" class="ai-answer" hidden></div>
+        </div>
       </div>
     </section>
 
