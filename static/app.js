@@ -881,11 +881,20 @@ function showAIAnswer(text, isError) {
   close.title = "Đóng";
   close.addEventListener("click", (e) => { e.stopPropagation(); hideAIAnswer(); });
   const body = document.createElement("div");
-  if (isError) body.className = "ai-answer-err";
-  body.textContent = text;
+  body.className = "ai-answer-body";
   aiEls.answer.appendChild(close);
   aiEls.answer.appendChild(body);
   aiEls.answer.hidden = false;
+  setAIAnswerBody(text, isError);
+}
+
+// Update just the answer text in-place, so streamed chunks can be rendered
+// incrementally without rebuilding the close button each time.
+function setAIAnswerBody(text, isError) {
+  const body = aiEls.answer.querySelector(".ai-answer-body");
+  if (!body) return;
+  body.className = isError ? "ai-answer-body ai-answer-err" : "ai-answer-body";
+  body.textContent = text;
 }
 
 function hideAIAnswer() {
@@ -916,9 +925,52 @@ async function askAI() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ index: currentIndex, ...rect, question }),
     });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body.detail || res.statusText);
-    showAIAnswer(body.answer || "(trống)", false);
+    if (!res.ok) {
+      const detail = await res.text().catch(() => "");
+      throw new Error(detail || res.statusText);
+    }
+
+    showAIAnswer("", false);
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let acc = "";
+    let failed = false;
+
+    const handleLine = (line) => {
+      const trimmed = line.trim();
+      if (!trimmed) return;
+      let msg;
+      try {
+        msg = JSON.parse(trimmed);
+      } catch {
+        return;
+      }
+      if (msg.error) {
+        showAIAnswer("Lỗi: " + msg.error, true);
+        failed = true;
+      } else if (msg.delta) {
+        acc += msg.delta;
+        setAIAnswerBody(acc, false);
+      }
+    };
+
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl;
+      while ((nl = buffer.indexOf("\n")) >= 0) {
+        handleLine(buffer.slice(0, nl));
+        buffer = buffer.slice(nl + 1);
+        if (failed) break;
+      }
+      if (failed) break;
+    }
+    if (!failed) {
+      handleLine(buffer);
+      if (!acc) setAIAnswerBody("(trống)", false);
+    }
   } catch (err) {
     showAIAnswer("Lỗi: " + err.message, true);
   } finally {

@@ -115,6 +115,43 @@ def _ask_claude(cfg: Config, b64: str, question: str) -> str:
     return "".join(b.text for b in msg.content if getattr(b, "type", None) == "text").strip()
 
 
+def _stream_claude(cfg: Config, b64: str, question: str):
+    """Yield Claude's answer text as it streams in."""
+    try:
+        from anthropic import Anthropic
+    except ImportError as exc:
+        raise AIError(
+            "Chưa cài SDK 'anthropic'. Chạy: pip install anthropic"
+        ) from exc
+
+    client = Anthropic(api_key=_api_key(cfg), base_url=_anthropic_base_url(cfg))
+    try:
+        with client.messages.stream(
+            model=cfg.ai_model,
+            max_tokens=cfg.ai_max_tokens,
+            messages=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "image",
+                            "source": {
+                                "type": "base64",
+                                "media_type": "image/jpeg",
+                                "data": b64,
+                            },
+                        },
+                        {"type": "text", "text": question},
+                    ],
+                }
+            ],
+        ) as stream:
+            for text in stream.text_stream:
+                yield text
+    except Exception as exc:  # surface SDK/proxy errors to the UI
+        raise AIError(_explain(exc)) from exc
+
+
 def _ask_openai(cfg: Config, b64: str, question: str) -> str:
     try:
         from openai import OpenAI
@@ -145,6 +182,38 @@ def _ask_openai(cfg: Config, b64: str, question: str) -> str:
     return (resp.output_text or "").strip()
 
 
+def _stream_openai(cfg: Config, b64: str, question: str):
+    """Yield the OpenAI Responses answer text as it streams in."""
+    try:
+        from openai import OpenAI
+    except ImportError as exc:
+        raise AIError("Chưa cài SDK 'openai'. Chạy: pip install openai") from exc
+
+    client = OpenAI(api_key=_api_key(cfg), base_url=_openai_base_url(cfg))
+    try:
+        # The aiauth Codex backend speaks the Responses API.
+        with client.responses.stream(
+            model=cfg.ai_model,
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": question},
+                        {
+                            "type": "input_image",
+                            "image_url": f"data:image/jpeg;base64,{b64}",
+                        },
+                    ],
+                }
+            ],
+        ) as stream:
+            for event in stream:
+                if event.type == "response.output_text.delta":
+                    yield event.delta
+    except Exception as exc:
+        raise AIError(_explain(exc)) from exc
+
+
 def _explain(exc: Exception) -> str:
     """Turn a connection error into a hint about the aiauth proxy not running."""
     text = str(exc)
@@ -173,3 +242,18 @@ def ask_about_region(cfg: Config, image_path, box: dict, question: str) -> str:
     if not answer:
         raise AIError("Model không trả về nội dung.")
     return answer
+
+
+def ask_about_region_stream(cfg: Config, image_path, box: dict, question: str):
+    """Like `ask_about_region`, but yields the answer text incrementally as the
+    model streams it. Raises AIError with a UI message on any failure."""
+    question = (question or cfg.ai_default_question).strip()
+    if not question:
+        raise AIError("Câu hỏi trống.")
+
+    b64 = _encode_jpeg(crop_region(image_path, box))
+
+    if cfg.ai_provider == "openai":
+        yield from _stream_openai(cfg, b64, question)
+    else:
+        yield from _stream_claude(cfg, b64, question)
