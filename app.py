@@ -382,6 +382,23 @@ def navigate(req: NavigateRequest, background_tasks: BackgroundTasks):
     return _state_payload(new_index)
 
 
+class SearchRequest(BaseModel):
+    name: str
+
+
+@app.post("/api/search")
+def search_by_name(req: SearchRequest, background_tasks: BackgroundTasks):
+    """Jump to the row whose image matches `name` exactly (raw image name or
+    on-disk filename, with or without the file extension)."""
+    _require_dataset()
+    index = dataset.find_by_name(req.name)
+    if index is None:
+        raise HTTPException(404, f"Không tìm thấy ảnh '{req.name.strip()}'")
+    new_index = state.set_index(index, len(dataset))
+    _queue_prefetch(background_tasks, new_index)
+    return _state_payload(new_index)
+
+
 class MethodRequest(BaseModel):
     method: str
 

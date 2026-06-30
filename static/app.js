@@ -12,6 +12,8 @@ const els = {
   btnNext: document.getElementById("btn-next"),
   btnGoto: document.getElementById("btn-goto"),
   gotoInput: document.getElementById("goto-input"),
+  btnSearch: document.getElementById("btn-search"),
+  searchInput: document.getElementById("search-input"),
   toggleRowInfo: document.getElementById("toggle-row-info"),
   rowInfoContent: document.getElementById("row-info-content"),
   imageName: document.getElementById("image-name"),
@@ -381,15 +383,42 @@ async function navigate(action, index) {
   await refreshFromState(state);
 }
 
-els.btnPrev.addEventListener("click", () => navigate("prev"));
-els.btnNext.addEventListener("click", () => navigate("next"));
-els.btnGoto.addEventListener("click", () => {
+function gotoFromInput() {
   const n = parseInt(els.gotoInput.value, 10);
   if (!isNaN(n)) navigate("goto", n - 1);
+}
+
+async function searchByName() {
+  const name = els.searchInput.value.trim();
+  if (!name) return;
+  const res = await fetch("/api/search", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    alert(body.detail || "Không tìm thấy ảnh");
+    return;
+  }
+  const state = await res.json();
+  await refreshFromState(state);
+}
+
+els.btnPrev.addEventListener("click", () => navigate("prev"));
+els.btnNext.addEventListener("click", () => navigate("next"));
+els.btnGoto.addEventListener("click", gotoFromInput);
+els.gotoInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") gotoFromInput();
+});
+els.btnSearch.addEventListener("click", searchByName);
+els.searchInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") searchByName();
 });
 
 document.addEventListener("keydown", (e) => {
   if (document.activeElement === els.gotoInput) return;
+  if (document.activeElement === els.searchInput) return;
   if (e.key === "ArrowRight") navigate("next");
   if (e.key === "ArrowLeft") navigate("prev");
 });

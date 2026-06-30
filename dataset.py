@@ -59,6 +59,20 @@ class Dataset:
     def candidates(self, index: int) -> list[Path]:
         return self._candidates[index]
 
+    def find_by_name(self, name: str) -> int | None:
+        """Find the row index whose image matches `name` exactly, accepting either
+        the raw image name (CSV value) or the on-disk filename, with or without the
+        file extension. Returns None when nothing matches."""
+        query = name.strip()
+        if not query:
+            return None
+        for i in range(len(self.df)):
+            raw = self.image_name(i)
+            fname = self._filenames[i]
+            if query in (raw, fname, Path(raw).stem, Path(fname).stem):
+                return i
+        return None
+
     def set_choice(self, index: int, folder: Path) -> bool:
         """Pick which folder serves this row's image. Only accepts a folder that
         actually contains the image. Returns whether the choice was applied."""
