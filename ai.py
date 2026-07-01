@@ -49,11 +49,18 @@ def _api_key(cfg: Config) -> str:
 
 
 def crop_region(image_path, box: dict) -> Image.Image:
-    """Crop `box` ({x, y, w, h} in image pixels) from the file at `image_path`,
-    honoring EXIF orientation and clamping to the image bounds. Returns an
-    RGB image capped to `_MAX_EDGE` on its longest side."""
+    """Crop `box` ({x, y, w, h} in image pixels, plus optional `rotation` in
+    clockwise degrees) from the file at `image_path`, honoring EXIF orientation
+    and clamping to the image bounds. When `rotation` is set, the image is rotated
+    first so the box coordinates match the orientation the user sees on screen.
+    Returns an RGB image capped to `_MAX_EDGE` on its longest side."""
     with Image.open(image_path) as im:
         im = ImageOps.exif_transpose(im).convert("RGB")
+        rotation = int(box.get("rotation", 0)) % 360
+        if rotation:
+            # PIL's rotate() is counter-clockwise; negate to rotate clockwise so it
+            # matches the preview rotation baked into the box coordinates.
+            im = im.rotate(-rotation, expand=True)
         W, H = im.size
         x = max(0, int(box.get("x", 0)))
         y = max(0, int(box.get("y", 0)))

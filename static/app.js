@@ -10,9 +10,7 @@ const els = {
   translatedStatus: document.getElementById("translated-status"),
   btnPrev: document.getElementById("btn-prev"),
   btnNext: document.getElementById("btn-next"),
-  btnGoto: document.getElementById("btn-goto"),
   gotoInput: document.getElementById("goto-input"),
-  btnSearch: document.getElementById("btn-search"),
   searchInput: document.getElementById("search-input"),
   toggleRowInfo: document.getElementById("toggle-row-info"),
   rowInfoContent: document.getElementById("row-info-content"),
@@ -407,16 +405,19 @@ async function searchByName() {
 
 els.btnPrev.addEventListener("click", () => navigate("prev"));
 els.btnNext.addEventListener("click", () => navigate("next"));
-els.btnGoto.addEventListener("click", gotoFromInput);
 els.gotoInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") gotoFromInput();
 });
-els.btnSearch.addEventListener("click", searchByName);
 els.searchInput.addEventListener("keydown", (e) => {
   if (e.key === "Enter") searchByName();
 });
 
 document.addEventListener("keydown", (e) => {
+  // Esc leaves the Ask AI mode without having to click the toggle again.
+  if (e.key === "Escape" && aiLocked()) {
+    hideAIBox();
+    return;
+  }
   if (document.activeElement === els.gotoInput) return;
   if (document.activeElement === els.searchInput) return;
   if (e.key === "ArrowRight") navigate("next");
@@ -854,24 +855,22 @@ aiEls.box.addEventListener("pointerdown", (e) => {
   aiEls.box.addEventListener("pointercancel", onUp);
 });
 
-// Invert the render transform: viewport point → original-image pixel.
-function viewportToImage(vx, vy) {
+// Map a viewport point to a pixel in the ROTATED image the user sees. The
+// displayed image is the rotated bounding box (bw×bh), axis-aligned in the
+// viewport at [ox, oy] with size [dispW, dispH], so this is a simple fraction.
+function viewportToRotatedImage(vx, vy) {
   const g = geom("original");
   if (!g) return null;
-  const cx0 = g.ox + g.dispW / 2;
-  const cy0 = g.oy + g.dispH / 2;
-  const dx = vx - cx0;
-  const dy = vy - cy0;
-  const rad = (-g.r * Math.PI) / 180;
-  const cos = Math.cos(rad);
-  const sin = Math.sin(rad);
-  const ux = dx * cos - dy * sin;
-  const uy = dx * sin + dy * cos;
-  return { ix: ux / g.scale + g.W / 2, iy: uy / g.scale + g.H / 2 };
+  return {
+    ix: ((vx - g.ox) / g.dispW) * g.bw,
+    iy: ((vy - g.oy) / g.dispH) * g.bh,
+  };
 }
 
-// The box's region in original-image pixels (axis-aligned bbox of its 4 mapped
-// corners), clamped to the image. null if the box isn't over the image.
+// The box's region in pixels of the rotated image the user sees, clamped to
+// that image, plus the preview rotation so the backend crops the same
+// orientation. Coordinates match the box exactly (both are axis-aligned to the
+// viewport). null if the box isn't over the image.
 function aiBoxImageRect() {
   const g = geom("original");
   if (!g) return null;
@@ -879,26 +878,22 @@ function aiBoxImageRect() {
   const top = aiEls.box.offsetTop;
   const right = left + aiEls.box.offsetWidth;
   const bottom = top + aiEls.box.offsetHeight;
-  const corners = [
-    [left, top], [right, top], [left, bottom], [right, bottom],
-  ].map(([x, y]) => viewportToImage(x, y));
-  if (corners.some((c) => !c)) return null;
+  const a = viewportToRotatedImage(left, top);
+  const b = viewportToRotatedImage(right, bottom);
+  if (!a || !b) return null;
 
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-  for (const c of corners) {
-    minX = Math.min(minX, c.ix);
-    minY = Math.min(minY, c.iy);
-    maxX = Math.max(maxX, c.ix);
-    maxY = Math.max(maxY, c.iy);
-  }
-  minX = Math.max(0, Math.min(g.W, minX));
-  maxX = Math.max(0, Math.min(g.W, maxX));
-  minY = Math.max(0, Math.min(g.H, minY));
-  maxY = Math.max(0, Math.min(g.H, maxY));
+  let minX = Math.max(0, Math.min(g.bw, Math.min(a.ix, b.ix)));
+  let maxX = Math.max(0, Math.min(g.bw, Math.max(a.ix, b.ix)));
+  let minY = Math.max(0, Math.min(g.bh, Math.min(a.iy, b.iy)));
+  let maxY = Math.max(0, Math.min(g.bh, Math.max(a.iy, b.iy)));
   const w = maxX - minX;
   const h = maxY - minY;
   if (w < 2 || h < 2) return null;
-  return { x: Math.round(minX), y: Math.round(minY), w: Math.round(w), h: Math.round(h) };
+  return {
+    x: Math.round(minX), y: Math.round(minY),
+    w: Math.round(w), h: Math.round(h),
+    rotation: g.r,
+  };
 }
 
 function showAIAnswer(text, isError) {

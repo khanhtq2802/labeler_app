@@ -557,11 +557,17 @@ def get_ai_config():
 
 class AskAIRequest(BaseModel):
     index: int
-    # Crop box in ORIGINAL-image pixel coordinates (the served original file).
+    # Crop box in pixel coordinates of the image AFTER applying `rotation` (the
+    # rotated bounding box the user sees on screen). With rotation 0 this is just
+    # the served original file's pixel coordinates.
     x: float
     y: float
     w: float
     h: float
+    # Uncommitted preview rotation (clockwise degrees) the user applied on screen
+    # but hasn't baked to disk; the crop is taken from the rotated image so the AI
+    # sees the same orientation the user does.
+    rotation: int = 0
     question: str = ""
 
 
@@ -577,7 +583,7 @@ def ask_ai(req: AskAIRequest):
     if not image_path.exists():
         raise HTTPException(404, f"Image file not found: {image_path}")
 
-    box = {"x": req.x, "y": req.y, "w": req.w, "h": req.h}
+    box = {"x": req.x, "y": req.y, "w": req.w, "h": req.h, "rotation": req.rotation}
 
     def gen():
         try:
