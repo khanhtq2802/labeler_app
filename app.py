@@ -191,24 +191,29 @@ def _manual_prefetch(index: int) -> None:
 
 
 def _queue_prefetch(background_tasks: BackgroundTasks, index: int) -> None:
-    """Translate-and-cache the current image and the next one ahead of time, so
-    paging forward shows the translation instantly."""
+    """Translate-and-cache the current image plus the neighbours on each side, so
+    paging in either direction shows the translation instantly. Caching the
+    previous image as well keeps backward labeling (end → start of the CSV) just
+    as responsive as labeling forward."""
     method = runtime["method"]
     total = len(dataset)
     next_index = index + 1
+    prev_index = index - 1
 
     if method == "manual":
         # Manual drives a single browser tab, serialized behind the live
         # translation. If the current image isn't cached yet, manual_auto will
-        # translate it and chain the next prefetch — prefetching here would jump
-        # the queue ahead of the image the user is waiting on. But if the current
-        # image is already cached, no live translation is pending, so the chain
-        # would never fire; prefetch the next one ourselves to keep it going.
-        if cache_path_for(index).exists() and 0 <= next_index < total:
-            background_tasks.add_task(_manual_prefetch, next_index)
+        # translate it and chain the neighbour prefetches — prefetching here would
+        # jump the queue ahead of the image the user is waiting on. But if the
+        # current image is already cached, no live translation is pending, so the
+        # chain would never fire; prefetch the neighbours ourselves to keep going.
+        if cache_path_for(index).exists():
+            for idx in (next_index, prev_index):
+                if 0 <= idx < total:
+                    background_tasks.add_task(_manual_prefetch, idx)
         return
 
-    for idx in (index, next_index):
+    for idx in (index, next_index, prev_index):
         if 0 <= idx < total:
             background_tasks.add_task(_prefetch, idx, method)
 
@@ -477,10 +482,12 @@ def manual_auto(index: int, background_tasks: BackgroundTasks):
             translator = get_translator(cfg, "manual")
             result = translator.translate_in_browser(image_path, output_path=cache_path)
 
-    # Prefetch the next image in the second tab while the user reviews this one.
-    next_index = index + 1
-    if next_index < len(dataset):
-        background_tasks.add_task(_manual_prefetch, next_index)
+    # Prefetch the neighbours in the second tab while the user reviews this one,
+    # so paging either forward or backward shows the translation instantly.
+    total = len(dataset)
+    for neighbour in (index + 1, index - 1):
+        if 0 <= neighbour < total:
+            background_tasks.add_task(_manual_prefetch, neighbour)
 
     return result
 
