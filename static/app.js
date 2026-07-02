@@ -508,23 +508,30 @@ function collectConfigForm() {
   };
 }
 
-async function applyConfig() {
+// Persist the current config form to the backend (rebuild config + dataset,
+// write config.yaml) and return the fresh setup payload. Throws on an invalid
+// form or a rejected config so callers can surface the error.
+async function pushConfigUpdate() {
   const payload = collectConfigForm();
   if (!payload.image_folders.length) {
-    alert("Cần ít nhất một thư mục ảnh.");
-    return;
+    throw new Error("Cần ít nhất một thư mục ảnh.");
   }
+  const res = await fetch("/api/config/update", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  const body = await res.json();
+  if (!res.ok) throw new Error(body.detail || res.statusText);
+  return body;
+}
+
+async function applyConfig() {
   const btn = document.getElementById("cfg-apply");
   btn.disabled = true;
   btn.textContent = "Đang quét…";
   try {
-    const res = await fetch("/api/config/update", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    const body = await res.json();
-    if (!res.ok) throw new Error(body.detail || res.statusText);
+    const body = await pushConfigUpdate();
     renderSetup(body); // re-render with the rebuilt config + fresh scan
     // Pick up the just-saved AI provider/model/default question for the Ask AI box.
     aiQuestion = null;
@@ -693,6 +700,11 @@ async function confirmSetup() {
   setupEls.confirm.disabled = true;
   setupEls.confirm.textContent = "Đang khởi tạo…";
   try {
+    // Flush any unsaved edits from the config form first, so starting without
+    // having clicked "Áp dụng & quét lại" still runs with the new config.
+    await pushConfigUpdate();
+    aiQuestion = null;
+    loadAIConfig();
     const res = await fetch("/api/confirm", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
