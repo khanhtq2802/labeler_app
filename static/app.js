@@ -413,10 +413,11 @@ els.searchInput.addEventListener("keydown", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  // Esc leaves the Ask AI mode without having to click the toggle again.
-  if (e.key === "Escape" && aiLocked()) {
-    hideAIBox();
-    return;
+  // While in Ask AI mode: Esc leaves it, Enter sends the request — no need to
+  // click the toggle or the Ask button with the mouse.
+  if (aiLocked()) {
+    if (e.key === "Escape") { hideAIBox(); return; }
+    if (e.key === "Enter" && !aiEls.ask.disabled) { e.preventDefault(); askAI(); return; }
   }
   if (document.activeElement === els.gotoInput) return;
   if (document.activeElement === els.searchInput) return;
