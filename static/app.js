@@ -19,6 +19,7 @@ const els = {
 
 let currentIndex = 0;
 let total = 0;
+let currentInCsv = true;
 let currentMethod = "manual";
 let currentTranslatedBlobUrl = null;
 
@@ -343,13 +344,15 @@ async function commitRotate() {
 }
 
 function updatePosition() {
-  els.position.textContent = `${currentIndex + 1} / ${total}`;
+  els.position.textContent =
+    `${currentIndex + 1} / ${total}` + (currentInCsv ? "" : " (ngoài CSV)");
   els.gotoInput.value = currentIndex + 1;
 }
 
 async function refreshFromState(state) {
   currentIndex = state.index;
   total = state.total;
+  currentInCsv = state.in_csv !== false;
   currentMethod = state.translation_method;
   updatePosition();
   els.method.value = state.translation_method;

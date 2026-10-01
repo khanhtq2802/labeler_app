@@ -7,6 +7,9 @@ import pandas as pd
 
 from config import Config
 
+# Extensions tried when a searched name has none (after the configured one).
+_IMAGE_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff", ".gif")
+
 
 class Dataset:
     def __init__(self, cfg: Config):
@@ -28,6 +31,10 @@ class Dataset:
         self._candidates: list[list[Path]] = []
         self._choice: list[Path | None] = []
         self._scan()
+        # Images found by searching the folders that aren't in the CSV. They are
+        # appended after the CSV rows (index >= csv_count) so every index-based
+        # endpoint (display, translate, rotate, AI) works on them unchanged.
+        self._extra_names: list[str] = []
 
     def _scan(self) -> None:
         """Locate every row's image across all configured folders."""
@@ -41,12 +48,23 @@ class Dataset:
             self._choice.append(found[0] if found else None)
 
     def __len__(self) -> int:
+        return len(self.df) + len(self._extra_names)
+
+    @property
+    def csv_count(self) -> int:
         return len(self.df)
 
+    def in_csv(self, index: int) -> bool:
+        return index < len(self.df)
+
     def image_name(self, index: int) -> str:
+        if not self.in_csv(index):
+            return self._extra_names[index - len(self.df)]
         return str(self.df.iloc[index][self.cfg.image_name_column])
 
     def row(self, index: int) -> dict:
+        if not self.in_csv(index):
+            return {self.cfg.image_name_column: self.image_name(index), "_note": "Ảnh không có trong CSV"}
         return self.df.iloc[index].to_dict()
 
     def image_path(self, index: int) -> Path:
@@ -60,17 +78,38 @@ class Dataset:
         return self._candidates[index]
 
     def find_by_name(self, name: str) -> int | None:
-        """Find the row index whose image matches `name` exactly, accepting either
-        the raw image name (CSV value) or the on-disk filename, with or without the
-        file extension. Returns None when nothing matches."""
+        """Find the index whose image matches `name` exactly, accepting either the
+        raw image name (CSV value) or the on-disk filename, with or without the
+        file extension. CSV rows win; otherwise the configured image folders are
+        searched and a match is added as an extra (non-CSV) entry. Returns None
+        when the image is in neither."""
         query = name.strip()
         if not query:
             return None
-        for i in range(len(self.df)):
+        for i in range(len(self)):
             raw = self.image_name(i)
             fname = self._filenames[i]
             if query in (raw, fname, Path(raw).stem, Path(fname).stem):
                 return i
+        return self._add_from_folders(query)
+
+    def _add_from_folders(self, query: str) -> int | None:
+        """Look for `query` directly inside the image folders and, if found,
+        append it as an extra entry. Only bare filenames are accepted so a query
+        can't escape the configured folders."""
+        if Path(query).name != query or query in (".", ".."):
+            return None
+        names = [query, self.cfg.apply_extension(query)]
+        for ext in _IMAGE_EXTENSIONS:
+            names += [query + ext, query + ext.upper()]
+        for fname in dict.fromkeys(names):  # dedup, keep order
+            found = [f for f in self.cfg.image_folders if (f / fname).is_file()]
+            if found:
+                self._extra_names.append(fname)
+                self._filenames.append(fname)
+                self._candidates.append(found)
+                self._choice.append(found[0])
+                return len(self) - 1
         return None
 
     def set_choice(self, index: int, folder: Path) -> bool:

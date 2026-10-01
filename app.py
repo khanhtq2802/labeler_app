@@ -232,6 +232,7 @@ def _state_payload(index: int) -> dict:
         "total": len(dataset),
         "image_name": dataset.image_name(index),
         "row": dataset.row(index),
+        "in_csv": dataset.in_csv(index),
         "translation_method": runtime["method"],
     }
 
@@ -252,7 +253,7 @@ def _setup_payload() -> dict:
     is empty and `ready` is False so the UI keeps the user on the config form."""
     if dataset is not None:
         report = dataset.scan_report()
-        total = len(dataset)
+        total = dataset.csv_count
     else:
         report = {"missing": [], "conflicts": []}
         total = 0
@@ -393,8 +394,9 @@ class SearchRequest(BaseModel):
 
 @app.post("/api/search")
 def search_by_name(req: SearchRequest, background_tasks: BackgroundTasks):
-    """Jump to the row whose image matches `name` exactly (raw image name or
-    on-disk filename, with or without the file extension)."""
+    """Jump to the image matching `name` exactly (raw image name or on-disk
+    filename, with or without the file extension). Images that aren't in the CSV
+    but exist in one of the image folders are found too."""
     _require_dataset()
     index = dataset.find_by_name(req.name)
     if index is None:
